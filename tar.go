@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -29,7 +30,9 @@ type TarFile struct {
 	Compression    Compression
 	file           *os.File
 	writer         *tar.Writer
+	reader         *tar.Reader
 	compressWriter io.WriteCloser
+	compressReader io.ReadCloser
 }
 
 // TarAddOptions ...
@@ -51,12 +54,14 @@ func NewTarFile(name string, compression Compression) (*TarFile, error) {
 // OpenTarFile opens a tar file on disk.
 func OpenTarFile(name string) (*TarFile, error) {
 	file, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
-
 	if err != nil {
 		return nil, err
 	}
 
-	compression := detectCompression(file)
+	compression, err := detectCompression(file)
+	if err != nil {
+		return nil, err
+	}
 
 	return &TarFile{Filename: name, Compression: compression, file: file}, nil
 }
@@ -98,6 +103,56 @@ func (t *TarFile) Add(name string, options *TarAddOptions) error {
 	}
 
 	return t.write(name, fileInfo, baseDir, options.Recursive)
+}
+
+// ExtractAll ...
+func (t *TarFile) ExtractAll(targetDir string) error {
+	t.ensureReader()
+
+	for {
+		header, err := t.reader.Next()
+		if err == io.EOF {
+			return nil
+		}
+
+		if err != nil {
+			return err
+		}
+
+		filename := path.Join(targetDir, header.Name)
+
+		fmt.Println(filename)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			// maybe 0755 ???
+			if err = os.MkdirAll(filename, os.FileMode(header.Mode)); err != nil {
+				return nil
+			}
+		case tar.TypeReg:
+			fmt.Println(header.Mode)
+			if err = os.MkdirAll(path.Dir(filename), os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+
+			file, err := os.Create(filename)
+			if err != nil {
+				return err
+			}
+
+			if _, err = io.Copy(file, t.reader); err != nil {
+				return err
+			}
+
+			if err = os.Chmod(filename, os.FileMode(header.Mode)); err != nil {
+				return err
+			}
+
+			file.Close()
+		default:
+			return fmt.Errorf("Not supported ype : %c in file %s", header.Typeflag, filename)
+		}
+	}
 }
 
 func (t *TarFile) write(name string, fileInfo os.FileInfo, baseDir string, recursive bool) error {
@@ -168,10 +223,41 @@ func (t *TarFile) ensureWriter() {
 	}
 }
 
-func detectCompression(file *os.File) Compression {
+func (t *TarFile) ensureReader() (err error) {
+	if t.reader != nil {
+		return
+	}
+
+	if t.Compression == Gzip {
+		if t.compressReader, err = gzip.NewReader(t.file); err != nil {
+			return
+		}
+	}
+
+	if t.compressReader == nil {
+		t.reader = tar.NewReader(t.file)
+	} else {
+		t.reader = tar.NewReader(t.compressReader)
+	}
+
+	return
+}
+
+func detectCompression(file *os.File) (Compression, error) {
 	source := make([]byte, 4)
 
-	file.Read(source)
+	currentPost, err := file.Seek(0, os.SEEK_CUR)
+	if err != nil {
+		return Uncompressed, err
+	}
+
+	if _, err := file.Read(source); err != nil {
+		return Uncompressed, err
+	}
+
+	if _, err = file.Seek(currentPost, os.SEEK_SET); err != nil {
+		return Uncompressed, err
+	}
 
 	for compression, m := range map[Compression][]byte{
 		Gzip: {0x1F, 0x8B, 0x08},
@@ -180,8 +266,8 @@ func detectCompression(file *os.File) Compression {
 			continue
 		}
 		if bytes.Compare(m, source[:len(m)]) == 0 {
-			return compression
+			return compression, nil
 		}
 	}
-	return Uncompressed
+	return Uncompressed, nil
 }

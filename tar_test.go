@@ -107,3 +107,35 @@ func TestWithoutCompression(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestExtractAll(t *testing.T) {
+	tarfile, err := NewTarFile("tests/extractall.tar.gz", Gzip)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = tarfile.Add("tests/folder/a.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = tarfile.Add("tests/folder/b.txt", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = tarfile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tarfile, err = OpenTarFile("tests/extractall.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = tarfile.ExtractAll("tests/extractall")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
