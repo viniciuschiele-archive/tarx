@@ -223,13 +223,12 @@ func TestRead(t *testing.T) {
 	tarfile, err = OpenTarFile(filename)
 	assert.NoError(t, err)
 
-	entry, reader, err := tarfile.Read("a.txt")
+	header, reader, err := tarfile.Read("a.txt")
 	assert.NoError(t, err)
 
-	content := make([]byte, entry.Size)
-	_, err = reader.Read(content)
+	content, _, err := reader.ReadLine()
 	assert.NoError(t, err)
 
-	assert.Equal(t, "a.txt", entry.Name)
+	assert.Equal(t, "a.txt", header.Name)
 	assert.Equal(t, "a.txt", string(content))
 }
