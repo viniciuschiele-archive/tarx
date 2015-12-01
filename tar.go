@@ -1,4 +1,4 @@
-package garchive
+package archive
 
 import (
 	"archive/tar"
@@ -27,8 +27,6 @@ const (
 var (
 	// ErrPathNotFound returned when a path is not found.
 	ErrPathNotFound = errors.New("Path not found.")
-	// ErrTarTypeNotSupported returned when a header with tar type is not supported.
-	ErrTarTypeNotSupported = errors.New("Tar type not supported.")
 )
 
 // TarFile represents a tar file in disk.
@@ -41,7 +39,34 @@ type TarFile struct {
 	tarReader      *tar.Reader
 	compressWriter io.WriteCloser
 	compressReader io.ReadCloser
-	startPosition  int64
+	entries        []*TarEntry
+	loaded         bool
+}
+
+// TarEntry ...
+type TarEntry struct {
+	tar.Header
+	OffsetData int64
+}
+
+func (e *TarEntry) toHeader() *tar.Header {
+	return &tar.Header{
+		Name:       e.Name,
+		Mode:       e.Mode,
+		Uid:        e.Uid,
+		Gid:        e.Gid,
+		Size:       e.Size,
+		ModTime:    e.ModTime,
+		Typeflag:   e.Typeflag,
+		Linkname:   e.Linkname,
+		Uname:      e.Uname,
+		Gname:      e.Gname,
+		Devmajor:   e.Devmajor,
+		Devminor:   e.Devminor,
+		AccessTime: e.AccessTime,
+		ChangeTime: e.ChangeTime,
+		Xattrs:     e.Xattrs,
+	}
 }
 
 // TarAddOptions ...
@@ -56,7 +81,12 @@ func NewTarFile(name string, compression Compression) (*TarFile, error) {
 		return nil, err
 	}
 
-	tarfile := &TarFile{Name: name, Compression: compression, file: file}
+	tarfile := &TarFile{
+		Name:        name,
+		Compression: compression,
+		file:        file,
+		entries:     []*TarEntry{}}
+
 	tarfile.initWriter()
 	return tarfile, nil
 }
@@ -68,13 +98,48 @@ func OpenTarFile(name string) (*TarFile, error) {
 		return nil, err
 	}
 
-	compression, err := detectCompression(file)
+	compression, err := getTarCompression(file)
 	if err != nil {
 		return nil, err
 	}
 
-	tarfile := &TarFile{Name: name, Compression: compression, file: file}
+	tarfile := &TarFile{
+		Name:        name,
+		Compression: compression,
+		file:        file,
+		entries:     []*TarEntry{}}
+
 	tarfile.initReader()
+	return tarfile, nil
+}
+
+// AppendTarFile opens a tar file on disk to append new files.
+func AppendTarFile(name string) (*TarFile, error) {
+	file, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	if err != nil {
+		return nil, err
+	}
+
+	compression, err := getTarCompression(file)
+	if err != nil {
+		return nil, err
+	}
+
+	if compression != Uncompressed {
+		return nil, errors.New("Append is not supported for compressed tar.")
+	}
+
+	if _, err = file.Seek(-2<<9, os.SEEK_END); err != nil {
+		return nil, err
+	}
+
+	tarfile := &TarFile{
+		Name:        name,
+		Compression: compression,
+		file:        file,
+		entries:     []*TarEntry{}}
+
+	tarfile.initWriter()
 	return tarfile, nil
 }
 
@@ -162,40 +227,67 @@ func (t *TarFile) Add(name string, options *TarAddOptions) error {
 		})
 }
 
+// GetNames returns the entries as a list of their names.
+func (t *TarFile) GetNames() ([]string, error) {
+	entries, err := t.GetEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, len(entries))
+
+	for i, entry := range entries {
+		names[i] = entry.Name
+	}
+
+	return names, nil
+}
+
+// GetEntries returns the entries as a list.
+func (t *TarFile) GetEntries() ([]*TarEntry, error) {
+	if t.loaded {
+		return t.entries, nil
+	}
+
+	for {
+		_, err := t.Next()
+
+		if err == io.EOF {
+			return t.entries, nil
+		}
+
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
 // Extract extracts one specific path into a directory.
 // Parameter `name` is the archive path to be extracted.
 // To extract all files `name` must be empty or "."
 func (t *TarFile) Extract(name, targetDir string) error {
-	if t.tarReader == nil {
-		return errors.New("File was not opened for reading")
-	}
-
-	_, err := t.file.Seek(t.startPosition, os.SEEK_SET)
+	entries, err := t.GetEntries()
 	if err != nil {
 		return err
 	}
 
-	for {
-		header, err := t.tarReader.Next()
-		if err == io.EOF {
-			return nil
-		}
-
-		if err != nil {
-			return err
-		}
-
-		relativeName, err := filepath.Rel(name, header.Name)
+	for _, entry := range entries {
+		relativeName, err := filepath.Rel(name, entry.Name)
 		if err != nil || strings.HasPrefix(relativeName, "..") {
 			continue
 		}
 
-		filename := path.Join(targetDir, header.Name)
+		_, err = t.file.Seek(entry.OffsetData, os.SEEK_SET)
+		if err != nil {
+			return err
+		}
 
-		switch header.Typeflag {
+		filename := path.Join(targetDir, entry.Name)
+
+		switch entry.Typeflag {
 		case tar.TypeDir:
 			// maybe 0755 ???
-			if err = os.MkdirAll(filename, os.FileMode(header.Mode)); err != nil {
+			if err = os.MkdirAll(filename, os.FileMode(entry.Mode)); err != nil {
 				return nil
 			}
 		case tar.TypeReg:
@@ -214,61 +306,84 @@ func (t *TarFile) Extract(name, targetDir string) error {
 				return err
 			}
 
-			if err = os.Chmod(filename, os.FileMode(header.Mode)); err != nil {
+			if err = os.Chmod(filename, os.FileMode(entry.Mode)); err != nil {
 				return err
 			}
 		default:
-			return fmt.Errorf("Not supported type : %c in file %s", header.Typeflag, filename)
+			return fmt.Errorf("Not supported type : %c in file %s", entry.Typeflag, filename)
 		}
 	}
+
+	return ErrPathNotFound
 }
 
-// Read reads one specific path and returns a buffered reader.
-// If path is not found it returns `ErrNotFound`
-// If path is not a regular file or directory it returns `ErrTarTypeNotSupported`
-func (t *TarFile) Read(name string) (*bufio.Reader, error) {
-	if t.tarReader == nil {
-		return nil, errors.New("File was not opened for reading")
+// Next advances to the next entry in the tar archive.
+// io.EOF is returned at the end of the input.
+func (t *TarFile) Next() (*TarEntry, error) {
+	header, err := t.tarReader.Next()
+	if err == io.EOF {
+		t.loaded = true
+		return nil, err
 	}
 
-	_, err := t.file.Seek(t.startPosition, os.SEEK_SET)
 	if err != nil {
 		return nil, err
 	}
 
-	for {
-		header, err := t.tarReader.Next()
-		if err == io.EOF {
-			return nil, ErrPathNotFound
-		}
+	offset, err := t.file.Seek(0, os.SEEK_CUR)
+	if err != nil {
+		return nil, err
+	}
 
-		if err != nil {
-			return nil, err
-		}
+	offset, _ = t.file.Seek(0, os.SEEK_CUR)
 
-		if name != header.Name {
+	entry := &TarEntry{*header, offset}
+	t.entries = append(t.entries, entry)
+	return entry, nil
+}
+
+// Read reads one specific path and returns a buffered reader.
+// If path is not found it returns `ErrPathNotFound`
+// If path is not a regular file it returns `nil`
+func (t *TarFile) Read(name string) (*TarEntry, *bufio.Reader, error) {
+	entries, err := t.GetEntries()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, entry := range entries {
+		if name != entry.Name {
 			continue
 		}
 
-		switch header.Typeflag {
+		switch entry.Typeflag {
 		case tar.TypeReg:
-			buffer := new(bytes.Buffer)
-			writer := bufio.NewWriter(buffer)
-
-			if _, err := io.Copy(writer, t.tarReader); err != nil {
-				return nil, err
-			}
-
-			err := writer.Flush()
+			_, err := t.file.Seek(entry.OffsetData, os.SEEK_SET)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
-			return bufio.NewReader(buffer), nil
+			return entry, bufio.NewReader(t.tarReader), nil
 		default:
-			return nil, ErrTarTypeNotSupported
+			return nil, nil, nil
 		}
 	}
+
+	return nil, nil, ErrPathNotFound
+}
+
+// Write writes a new file into tar file.
+func (t *TarFile) Write(entry *TarEntry, reader io.Reader) error {
+	if err := t.tarWriter.WriteHeader(entry.toHeader()); err != nil {
+		return err
+	}
+
+	if reader == nil {
+		return nil
+	}
+
+	_, err := io.Copy(t.tarWriter, reader)
+	return err
 }
 
 func (t *TarFile) initReader() (err error) {
@@ -287,8 +402,6 @@ func (t *TarFile) initReader() (err error) {
 	} else {
 		t.tarReader = tar.NewReader(t.compressReader)
 	}
-
-	t.startPosition, err = t.file.Seek(0, os.SEEK_CUR)
 
 	return
 }
@@ -309,7 +422,7 @@ func (t *TarFile) initWriter() {
 	}
 }
 
-func detectCompression(file *os.File) (Compression, error) {
+func getTarCompression(file *os.File) (Compression, error) {
 	source := make([]byte, 4)
 
 	if _, err := file.Read(source); err != nil {
