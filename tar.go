@@ -41,6 +41,7 @@ type UnTarOptions struct {
 	Filters []string
 }
 
+// tarFile holds all resources for the opened tar file
 type tarFile struct {
 	Name           string
 	File           *os.File
@@ -48,6 +49,13 @@ type tarFile struct {
 	TarWriter      *tar.Writer
 	CompressReader io.ReadCloser
 	CompressWriter io.WriteCloser
+}
+
+// tarReader is used to expose the tar file to the user
+// Close needs to call in order to close the tar file.
+type tarReader struct {
+	io.ReadCloser
+	TarFile *tarFile
 }
 
 // Tar compress a source path into a tar file.
@@ -146,6 +154,38 @@ func ListTar(name string) ([]*tar.Header, error) {
 		}
 
 		headers = append(headers, header)
+	}
+}
+
+// ReadTar reads a specific file from the tar file.
+// If the file is not a regular file it returns a reader nil
+func ReadTar(name string, fileName string) (*tar.Header, io.ReadCloser, error) {
+	tarFile, err := openTarFile(name, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	name = path.Clean(fileName)
+
+	for {
+		header, err := tarFile.TarReader.Next()
+		if err == io.EOF {
+			closeTarFile(tarFile, false)
+			return nil, nil, os.ErrNotExist
+		}
+		if err != nil {
+			closeTarFile(tarFile, false)
+			return nil, nil, err
+		}
+
+		// If the file found is not a regular file we don't return a reader
+		if name == header.Name {
+			if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
+				return header, &tarReader{TarFile: tarFile}, nil
+			}
+			closeTarFile(tarFile, false)
+			return header, nil, nil
+		}
 	}
 }
 
@@ -421,4 +461,12 @@ func detectCompression(file *os.File) (Compression, error) {
 		}
 	}
 	return Uncompressed, nil
+}
+
+func (r *tarReader) Read(p []byte) (n int, err error) {
+	return r.TarFile.TarReader.Read(p)
+}
+
+func (r *tarReader) Close() error {
+	return closeTarFile(r.TarFile, false)
 }

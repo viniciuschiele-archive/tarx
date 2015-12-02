@@ -61,6 +61,55 @@ func TestTarFolderWithIncludeSourceDir(t *testing.T) {
 	assert.Equal(t, "input/d", headers[6].Name)
 }
 
+func TestAppendCompressedTar(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/c", &TarOptions{Compression: Gzip})
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	err = Tar(filename, "tests/input/a.txt", &TarOptions{Append: true})
+	assert.EqualError(t, ErrAppendNotSupported, err.Error())
+}
+
+func TestReadTar(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/a.txt", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	header, reader, err := ReadTar(filename, "a.txt")
+	assert.Equal(t, nil, err)
+	assert.Equal(t, "a.txt", header.Name)
+	b, _ := ioutil.ReadAll(reader)
+	assert.Equal(t, "a.txt\n", string(b))
+	assert.Equal(t, nil, reader.Close())
+}
+
+func TestReadTarDir(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	_, reader, err := ReadTar(filename, "c")
+	assert.Equal(t, nil, reader)
+	assert.Equal(t, nil, err)
+}
+
+func TestReadTarNotExist(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/a.txt", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	_, _, err = ReadTar(filename, "notExists.txt")
+	assert.Equal(t, os.ErrNotExist, err)
+}
+
 func TestUnTar(t *testing.T) {
 	filename := "tests/test.tar"
 
@@ -163,17 +212,6 @@ func TestAppendTar(t *testing.T) {
 	assert.Equal(t, "c1.txt", headers[0].Name)
 	assert.Equal(t, "c2.txt", headers[1].Name)
 	assert.Equal(t, "a.txt", headers[2].Name)
-}
-
-func TestAppendCompressedTar(t *testing.T) {
-	filename := "tests/test.tar"
-
-	err := Tar(filename, "tests/input/c", &TarOptions{Compression: Gzip})
-	assert.NoError(t, err)
-	defer os.Remove(filename)
-
-	err = Tar(filename, "tests/input/a.txt", &TarOptions{Append: true})
-	assert.EqualError(t, ErrAppendNotSupported, err.Error())
 }
 
 func pathExists(name string) bool {
