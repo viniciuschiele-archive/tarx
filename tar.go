@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,8 +22,14 @@ const (
 	Gzip
 )
 
+var (
+	// ErrAppendNotSupported means append cannot be used on compressed files
+	ErrAppendNotSupported = errors.New("Append is only supported on compressed files")
+)
+
 // TarOptions is the compression configuration
 type TarOptions struct {
+	Append           bool
 	Compression      Compression
 	IncludeSourceDir bool
 	Filters          []string
@@ -30,9 +37,8 @@ type TarOptions struct {
 
 // UnTarOptions is the decompression configuration
 type UnTarOptions struct {
-	FlatDir    bool
-	Filters    []string
-	NoOverride bool
+	FlatDir bool
+	Filters []string
 }
 
 type tarFile struct {
@@ -53,11 +59,17 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 
 	srcInfo, err := os.Stat(srcPath)
 	if err != nil {
-		return err
+		return
 	}
 
-	// We create a tar file on disk
-	tarFile, err := createTarFile(name, options)
+	var tarFile *tarFile
+
+	if options.Append {
+		tarFile, err = openTarFile(name, true)
+	} else {
+		tarFile, err = createTarFile(name, options.Compression)
+	}
+
 	if err != nil {
 		return
 	}
@@ -115,10 +127,12 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 
 // ListTar lists all entries from a tar file
 func ListTar(name string) ([]*tar.Header, error) {
-	tarFile, err := openTarFile(name)
+	tarFile, err := openTarFile(name, false)
 	if err != nil {
 		return nil, err
 	}
+
+	defer closeTarFile(tarFile, false)
 
 	headers := []*tar.Header{}
 
@@ -141,12 +155,14 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 		options = &UnTarOptions{}
 	}
 
-	if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+	tarFile, err := openTarFile(name, false)
+	if err != nil {
 		return err
 	}
 
-	tarFile, err := openTarFile(name)
-	if err != nil {
+	defer closeTarFile(tarFile, false)
+
+	if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
 		return err
 	}
 
@@ -189,7 +205,7 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 	}
 }
 
-func createTarFile(name string, options *TarOptions) (*tarFile, error) {
+func createTarFile(name string, compression Compression) (*tarFile, error) {
 	file, err := os.Create(name)
 	if err != nil {
 		return nil, err
@@ -198,7 +214,7 @@ func createTarFile(name string, options *TarOptions) (*tarFile, error) {
 	var tarWriter *tar.Writer
 	var compressWriter io.WriteCloser
 
-	if options.Compression == Gzip {
+	if compression == Gzip {
 		compressWriter = gzip.NewWriter(file)
 	}
 
@@ -216,19 +232,40 @@ func createTarFile(name string, options *TarOptions) (*tarFile, error) {
 	}, nil
 }
 
-func openTarFile(name string) (*tarFile, error) {
-	file, err := os.OpenFile(name, os.O_RDONLY, os.ModePerm)
+func openTarFile(name string, append bool) (*tarFile, error) {
+	file, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 
+	// Reads the header from the file to see which compression
+	// this file has been using.
 	compression, err := detectCompression(file)
 	if err != nil {
 		return nil, err
 	}
 
+	// I have found only this hack to append files into tar file.
+	// It works only for uncompressed tar files :(
+	// http://stackoverflow.com/questions/18323995/golang-append-file-to-an-existing-tar-archive
+	// We may improve it in the future.
+	if append {
+		if compression != Uncompressed {
+			return nil, ErrAppendNotSupported
+		}
+
+		if _, err = file.Seek(-2<<9, os.SEEK_END); err != nil {
+			return nil, err
+		}
+	}
+
 	var tarReader *tar.Reader
+	var tarWriter *tar.Writer
 	var compressReader io.ReadCloser
+
+	if append {
+		tarWriter = tar.NewWriter(file)
+	}
 
 	if compression == Gzip {
 		if compressReader, err = gzip.NewReader(file); err != nil {
@@ -246,6 +283,7 @@ func openTarFile(name string) (*tarFile, error) {
 		Name:           name,
 		File:           file,
 		TarReader:      tarReader,
+		TarWriter:      tarWriter,
 		CompressReader: compressReader,
 	}, nil
 }

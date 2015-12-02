@@ -146,6 +146,36 @@ func TestUnTarWithConflict(t *testing.T) {
 	assert.Equal(t, "z.txt", readContent("tests/output/c/z.txt"))
 }
 
+func TestAppendTar(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/c", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	err = Tar(filename, "tests/input/a.txt", &TarOptions{Append: true})
+	assert.NoError(t, err)
+
+	headers, err := ListTar(filename)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 3, len(headers))
+	assert.Equal(t, "c1.txt", headers[0].Name)
+	assert.Equal(t, "c2.txt", headers[1].Name)
+	assert.Equal(t, "a.txt", headers[2].Name)
+}
+
+func TestAppendCompressedTar(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/c", &TarOptions{Compression: Gzip})
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	err = Tar(filename, "tests/input/a.txt", &TarOptions{Append: true})
+	assert.EqualError(t, ErrAppendNotSupported, err.Error())
+}
+
 func pathExists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		return false
