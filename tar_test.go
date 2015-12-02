@@ -168,7 +168,7 @@ func TestUnTarWithFilters(t *testing.T) {
 	assert.Equal(t, true, pathExists("tests/output/d"))
 }
 
-func TestUnTarWithConflict(t *testing.T) {
+func TestUnTarWithOverride(t *testing.T) {
 	filename := "tests/test.tar"
 
 	err := Tar(filename, "tests/input", nil)
@@ -193,6 +193,24 @@ func TestUnTarWithConflict(t *testing.T) {
 
 	assert.Equal(t, "a.txt\n", readContent("tests/output/a.txt"))
 	assert.Equal(t, "z.txt", readContent("tests/output/c/z.txt"))
+}
+
+func TestUnTarWithoutOverride(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input/a.txt", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	os.MkdirAll("tests/output", os.ModePerm)
+	writeContent("tests/output/a.txt", "new a.txt")
+
+	err = UnTar(filename, "tests/output", &UnTarOptions{NoOverride: true})
+	assert.NoError(t, err)
+	defer os.RemoveAll("tests/output")
+
+	assert.Equal(t, true, pathExists("tests/output/a.txt"))
+	assert.Equal(t, "new a.txt", readContent("tests/output/a.txt"))
 }
 
 func TestAppendTar(t *testing.T) {

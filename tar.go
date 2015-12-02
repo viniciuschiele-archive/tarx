@@ -37,8 +37,9 @@ type TarOptions struct {
 
 // UnTarOptions is the decompression configuration
 type UnTarOptions struct {
-	FlatDir bool
-	Filters []string
+	FlatDir    bool
+	Filters    []string
+	NoOverride bool
 }
 
 // tarFile holds all resources for the opened tar file
@@ -239,7 +240,7 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 		// relative to the `targetDir`
 		filePath = path.Join(targetDir, filePath)
 
-		if err := extractTarFile(filePath, header, tarFile.TarReader); err != nil {
+		if err := extractTarFile(filePath, header, tarFile.TarReader, options.NoOverride); err != nil {
 			return err
 		}
 	}
@@ -328,7 +329,7 @@ func openTarFile(name string, append bool) (*tarFile, error) {
 	}, nil
 }
 
-func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader) error {
+func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader, noOverride bool) error {
 	// header.Mode is in linux format, we have to converto os.FileMode,
 	// to be compatible to windows, ...
 	headerInfo := header.FileInfo()
@@ -340,14 +341,11 @@ func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader) err
 			return err
 		}
 
-		// When the `filePath` already exists on disk and it is a regular file
+		// If the `filePath` already exists on disk and it is a regular file
 		// it must be deleted in order to create the directory otherwise we should return an error.
-		// When `filePath` already exists on dis and it is a directory
-		// we try to delete it in order to create the extracted directory,
-		// if it is not possible we are going to use this directory to extract the files.
 
-		if err == nil {
-			if err := os.Remove(filePath); err != nil && !fileInfo.IsDir() {
+		if err == nil && !fileInfo.IsDir() {
+			if err := os.Remove(filePath); err != nil {
 				return err
 			}
 		}
@@ -366,6 +364,10 @@ func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader) err
 		// When the `filePath` already exists on disk it must be deleted
 		// in order to create the extracted file
 		if err == nil {
+			if noOverride {
+				return nil
+			}
+
 			if err := os.Remove(filePath); err != nil {
 				return err
 			}
