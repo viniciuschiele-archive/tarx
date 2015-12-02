@@ -6,6 +6,19 @@ import (
 	"strings"
 )
 
+type readCloserWrapper struct {
+	io.ReadCloser
+	Reader io.Reader
+}
+
+func (rc *readCloserWrapper) Read(p []byte) (n int, err error) {
+	return rc.Reader.Read(p)
+}
+
+func (rc *readCloserWrapper) Close() error {
+	return nil
+}
+
 func createFile(filePath string, mode os.FileMode, reader io.Reader) error {
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, mode)
 	if err != nil {

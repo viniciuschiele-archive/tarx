@@ -3,6 +3,7 @@ package archive
 import (
 	"archive/tar"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -20,11 +21,15 @@ const (
 	Uncompressed Compression = iota
 	// Gzip is gzip compression algorithm.
 	Gzip
+	// Bzip2 is bzip2 compression algorithm.
+	Bzip2
 )
 
 var (
 	// ErrAppendNotSupported means append cannot be used on compressed files
 	ErrAppendNotSupported = errors.New("Append is only supported on compressed files")
+	// ErrBzip2NotSupported means bzip2 is not supported for compression
+	ErrBzip2NotSupported = errors.New("Bzip2 is not supported for compression")
 )
 
 // TarOptions is the compression configuration
@@ -247,6 +252,10 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 }
 
 func createTarFile(name string, compression Compression) (*tarFile, error) {
+	if compression == Bzip2 {
+		return nil, ErrBzip2NotSupported
+	}
+
 	file, err := os.Create(name)
 	if err != nil {
 		return nil, err
@@ -312,6 +321,8 @@ func openTarFile(name string, append bool) (*tarFile, error) {
 		if compressReader, err = gzip.NewReader(file); err != nil {
 			return nil, err
 		}
+	} else if compression == Bzip2 {
+		compressReader = &readCloserWrapper{Reader: bzip2.NewReader(file)}
 	}
 
 	if compressReader == nil {
@@ -400,7 +411,7 @@ func writeTarFile(filePath, name string, writer *tar.Writer) error {
 		return err
 	}
 
-	if header.Typeflag != tar.TypeReg {
+	if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 		return nil
 	}
 
@@ -453,7 +464,8 @@ func detectCompression(file *os.File) (Compression, error) {
 	}
 
 	for compression, m := range map[Compression][]byte{
-		Gzip: {0x1F, 0x8B, 0x08},
+		Bzip2: {0x42, 0x5A, 0x68},
+		Gzip:  {0x1F, 0x8B, 0x08},
 	} {
 		if len(source) < len(m) {
 			continue
