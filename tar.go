@@ -9,7 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 )
 
 // Compression is the state represtents if compressed or not.
@@ -26,12 +25,14 @@ const (
 type TarOptions struct {
 	Compression      Compression
 	IncludeSourceDir bool
+	Filters          []string
 }
 
 // UnTarOptions ...
 type UnTarOptions struct {
-	FlatDir bool
-	Filters []string
+	FlatDir    bool
+	Filters    []string
+	NoOverride bool
 }
 
 type tarFile struct {
@@ -44,68 +45,64 @@ type tarFile struct {
 }
 
 // Tar ...
-func Tar(name, srcPath string, options *TarOptions) error {
+func Tar(name, srcPath string, options *TarOptions) (err error) {
 	if options == nil {
 		options = &TarOptions{}
 	}
 
-	tarFile, err := newTarFile(name, options)
+	srcInfo, err := os.Stat(srcPath)
 	if err != nil {
 		return err
 	}
 
-	defer tarFile.Close()
-
-	fileInfo, err := os.Stat(srcPath)
+	tarFile, err := createTarFile(name, options)
 	if err != nil {
-		return err
+		return
 	}
 
-	// Removes the last slash to avoid different behaviors when `name` is a folder
+	defer func() {
+		closeTarFile(tarFile, err != nil)
+	}()
+
+	// Removes the last slash to avoid different behaviors when `srcPath` is a folder
 	srcPath = path.Clean(srcPath)
-	baseDir := path.Dir(srcPath)
 
-	if fileInfo.IsDir() && !options.IncludeSourceDir {
-		baseDir = srcPath
+	// All files added are relative to the tar file
+	// If IncludeSourceDir is true one level behind is added
+	relPath := path.Dir(srcPath)
+	if srcInfo.IsDir() && !options.IncludeSourceDir {
+		relPath = srcPath
 	}
 
-	return filepath.Walk(srcPath,
-		func(path string, info os.FileInfo, err error) error {
+	// To improve performance filters are prepared before.
+	filters := prepareFilters(options.Filters)
+
+	err = filepath.Walk(srcPath,
+		func(filePath string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
 
-			header, err := tar.FileInfoHeader(info, info.Name())
+			// TODO: add comment
+			relFilePath, err := filepath.Rel(relPath, filePath)
 			if err != nil {
 				return err
 			}
 
-			if header.Name, err = filepath.Rel(baseDir, path); err != nil {
-				return err
-			}
-
-			if header.Name == "." {
+			// TODO: add comment
+			if relFilePath == "." {
 				return nil
 			}
 
-			if err := tarFile.TarWriter.WriteHeader(header); err != nil {
-				return err
-			}
-
-			if info.IsDir() {
+			// TODO: add comment
+			if !optimizedMatches(relFilePath, filters) {
 				return nil
 			}
 
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-
-			defer file.Close()
-
-			_, err = io.Copy(tarFile.TarWriter, file)
-			return err
+			return writeTarFile(filePath, relFilePath, tarFile.TarWriter)
 		})
+
+	return
 }
 
 // ListTar ...
@@ -136,10 +133,17 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 		options = &UnTarOptions{}
 	}
 
+	if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+		return err
+	}
+
 	tarFile, err := openTarFile(name)
 	if err != nil {
 		return err
 	}
+
+	// To improve performance filters are prepared before.
+	filters := prepareFilters(options.Filters)
 
 	for {
 		header, err := tarFile.TarReader.Next()
@@ -150,64 +154,35 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 			return err
 		}
 
-		filename := header.Name
+		filePath := filepath.Clean(header.Name)
 
-		if options.Filters != nil {
-			matched := false
-			for _, filter := range options.Filters {
-				if strings.HasSuffix(filename, filter) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
+		if !optimizedMatches(filePath, filters) {
+			continue
 		}
 
+		// If it is Flat Dir we have to store all files
+		// in the root folder and we have to ignore
+		// all directories
 		if options.FlatDir {
 			if header.Typeflag == tar.TypeDir {
 				continue
 			}
-			filename = filepath.Base(filename)
+			filePath = filepath.Base(filePath)
 		}
 
-		if !path.IsAbs(filename) {
-			filename = path.Join(targetDir, filename)
+		// If the file has been written with absolute path
+		// we should extract as it is.
+		if !path.IsAbs(filePath) {
+			filePath = path.Join(targetDir, filePath)
 		}
 
-		switch header.Typeflag {
-		case tar.TypeDir:
-			// maybe 0755 ???
-			if err = os.MkdirAll(filename, os.FileMode(header.Mode)); err != nil {
-				return nil
-			}
-		case tar.TypeReg:
-			if err = os.MkdirAll(path.Dir(filename), 0755); err != nil {
-				return err
-			}
-
-			file, err := os.Create(filename)
-			if err != nil {
-				return err
-			}
-
-			defer file.Close()
-
-			if _, err = io.Copy(file, tarFile.TarReader); err != nil {
-				return err
-			}
-
-			if err = os.Chmod(filename, os.FileMode(header.Mode)); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("Not supported type : %c in file %s", header.Typeflag, filename)
+		if err := extractTarFile(filePath, header, tarFile.TarReader, options.NoOverride); err != nil {
+			return err
 		}
 	}
 }
 
-func newTarFile(name string, options *TarOptions) (*tarFile, error) {
+func createTarFile(name string, options *TarOptions) (*tarFile, error) {
 	file, err := os.Create(name)
 	if err != nil {
 		return nil, err
@@ -292,20 +267,95 @@ func getTarCompression(file *os.File) (Compression, error) {
 	return Uncompressed, nil
 }
 
-func (t *tarFile) Close() error {
-	if t.TarWriter != nil {
-		if err := t.TarWriter.Close(); err != nil {
+func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader, noOverride bool) error {
+	// header.Mode is in linux format, we have to converto os.FileMode,
+	// to be compatible to windows, ...
+	fileInfo := header.FileInfo()
+
+	switch header.Typeflag {
+	case tar.TypeDir:
+		// Create directory unless it exists as a directory already.
+		// In that case we just want to merge the two
+		// If it is not a dictionary returns the error
+		if fi, err := os.Lstat(filePath); !(err == nil && fi.IsDir()) {
+			if err := os.Mkdir(filePath, fileInfo.Mode()); err != nil {
+				return err
+			}
+		}
+		return nil
+	case tar.TypeReg, tar.TypeRegA:
+		// Source is regular file
+		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, fileInfo.Mode())
+		if err != nil {
+			return err
+		}
+
+		defer file.Close()
+
+		if _, err := io.Copy(file, reader); err != nil {
+			return err
+		}
+
+		return nil
+	default:
+		return fmt.Errorf("File type not supported: %c", header.Typeflag)
+	}
+}
+
+func writeTarFile(filePath, name string, writer *tar.Writer) error {
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return err
+	}
+
+	header, err := tar.FileInfoHeader(fileInfo, "")
+	if err != nil {
+		return err
+	}
+
+	header.Name = name
+
+	if err := writer.WriteHeader(header); err != nil {
+		return err
+	}
+
+	if header.Typeflag != tar.TypeReg {
+		return nil
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	_, err = io.Copy(writer, file)
+	return err
+}
+
+func closeTarFile(tf *tarFile, remove bool) error {
+	if tf.TarWriter != nil {
+		if err := tf.TarWriter.Close(); err != nil {
 			return err
 		}
 	}
 
-	if t.CompressReader != nil {
-		return t.CompressReader.Close()
+	if tf.CompressReader != nil {
+		return tf.CompressReader.Close()
 	}
 
-	if t.CompressWriter != nil {
-		return t.CompressWriter.Close()
+	if tf.CompressWriter != nil {
+		return tf.CompressWriter.Close()
 	}
 
-	return t.File.Close()
+	if err := tf.File.Close(); err != nil {
+		return err
+	}
+
+	if remove {
+		return os.Remove(tf.Name)
+	}
+
+	return nil
 }

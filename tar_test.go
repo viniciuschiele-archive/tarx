@@ -9,10 +9,10 @@ import (
 
 func TestTarFile(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input/a.txt", nil)
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
 	headers, err := ListTar(filename)
 	assert.NoError(t, err)
@@ -23,10 +23,10 @@ func TestTarFile(t *testing.T) {
 
 func TestTarFolder(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input", nil)
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
 	headers, err := ListTar(filename)
 	assert.NoError(t, err)
@@ -40,12 +40,12 @@ func TestTarFolder(t *testing.T) {
 	assert.Equal(t, "d", headers[5].Name)
 }
 
-func TestTarFolderWithIncludeSourceFolder(t *testing.T) {
+func TestTarFolderWithIncludeSourceDir(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input", &TarOptions{IncludeSourceDir: true})
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
 	headers, err := ListTar(filename)
 	assert.NoError(t, err)
@@ -62,10 +62,10 @@ func TestTarFolderWithIncludeSourceFolder(t *testing.T) {
 
 func TestUnTar(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input", nil)
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
 	err = UnTar(filename, "tests/output", nil)
 	assert.NoError(t, err)
@@ -81,10 +81,10 @@ func TestUnTar(t *testing.T) {
 
 func TestUnTarWithFlatDir(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input", nil)
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
 	err = UnTar(filename, "tests/output", &UnTarOptions{FlatDir: true})
 	assert.NoError(t, err)
@@ -100,12 +100,12 @@ func TestUnTarWithFlatDir(t *testing.T) {
 
 func TestUnTarWithFilters(t *testing.T) {
 	filename := "tests/test.tar"
-	defer os.Remove(filename)
 
 	err := Tar(filename, "tests/input", nil)
 	assert.NoError(t, err)
+	defer os.Remove(filename)
 
-	filters := []string{"a.txt", "c/c2.txt"}
+	filters := []string{"a.txt", "c/c2.txt", "d"}
 	err = UnTar(filename, "tests/output", &UnTarOptions{Filters: filters})
 	assert.NoError(t, err)
 	defer os.RemoveAll("tests/output")
@@ -115,7 +115,7 @@ func TestUnTarWithFilters(t *testing.T) {
 	assert.Equal(t, true, pathExists("tests/output/c"))
 	assert.Equal(t, false, pathExists("tests/output/c/c1.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c/c2.txt"))
-	assert.Equal(t, false, pathExists("tests/output/d"))
+	assert.Equal(t, true, pathExists("tests/output/d"))
 }
 
 func pathExists(name string) bool {
