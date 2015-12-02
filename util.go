@@ -1,9 +1,25 @@
 package archive
 
 import (
+	"io"
 	"os"
 	"strings"
 )
+
+func createFile(filePath string, mode os.FileMode, reader io.Reader) error {
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	if _, err := io.Copy(file, reader); err != nil {
+		return err
+	}
+
+	return nil
+}
 
 func prepareFilters(filters []string) [][]string {
 	if filters == nil {

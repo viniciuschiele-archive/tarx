@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"io/ioutil"
 	"os"
 	"testing"
 
@@ -118,9 +119,49 @@ func TestUnTarWithFilters(t *testing.T) {
 	assert.Equal(t, true, pathExists("tests/output/d"))
 }
 
+func TestUnTarWithConflict(t *testing.T) {
+	filename := "tests/test.tar"
+
+	err := Tar(filename, "tests/input", nil)
+	assert.NoError(t, err)
+	defer os.Remove(filename)
+
+	os.MkdirAll("tests/output/c", os.ModePerm)
+	writeContent("tests/output/a.txt", "new a.txt")
+	writeContent("tests/output/c/z.txt", "z.txt")
+
+	err = UnTar(filename, "tests/output", nil)
+	assert.NoError(t, err)
+	defer os.RemoveAll("tests/output")
+
+	assert.Equal(t, true, pathExists("tests/output/a.txt"))
+	assert.Equal(t, true, pathExists("tests/output/b.txt"))
+	assert.Equal(t, true, pathExists("tests/output/c"))
+	assert.Equal(t, true, pathExists("tests/output/c/c1.txt"))
+	assert.Equal(t, true, pathExists("tests/output/c/c2.txt"))
+	assert.Equal(t, true, pathExists("tests/output/c/z.txt"))
+	assert.Equal(t, true, pathExists("tests/output/d"))
+
+	assert.Equal(t, "a.txt\n", readContent("tests/output/a.txt"))
+	assert.Equal(t, "z.txt", readContent("tests/output/c/z.txt"))
+}
+
 func pathExists(name string) bool {
 	if _, err := os.Stat(name); err != nil {
 		return false
 	}
 	return true
+}
+
+func readContent(filePath string) string {
+	file, _ := os.OpenFile(filePath, os.O_RDWR, os.ModePerm)
+	defer file.Close()
+	content, _ := ioutil.ReadAll(file)
+	return string(content)
+}
+
+func writeContent(filePath, content string) {
+	file, _ := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	defer file.Close()
+	file.WriteString(content)
 }

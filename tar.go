@@ -21,14 +21,14 @@ const (
 	Gzip
 )
 
-// TarOptions ...
+// TarOptions is the compression configuration
 type TarOptions struct {
 	Compression      Compression
 	IncludeSourceDir bool
 	Filters          []string
 }
 
-// UnTarOptions ...
+// UnTarOptions is the decompression configuration
 type UnTarOptions struct {
 	FlatDir    bool
 	Filters    []string
@@ -44,7 +44,8 @@ type tarFile struct {
 	CompressWriter io.WriteCloser
 }
 
-// Tar ...
+// Tar compress a source path into a tar file.
+// It supports compressed and uncompressed format
 func Tar(name, srcPath string, options *TarOptions) (err error) {
 	if options == nil {
 		options = &TarOptions{}
@@ -55,11 +56,13 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 		return err
 	}
 
+	// We create a tar file on disk
 	tarFile, err := createTarFile(name, options)
 	if err != nil {
 		return
 	}
 
+	// If any error occurs we delete the tar file
 	defer func() {
 		closeTarFile(tarFile, err != nil)
 	}()
@@ -83,29 +86,34 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 				return err
 			}
 
-			// TODO: add comment
+			// Makes the file to be relative to the tar file
+			// We don't support absolute path while compressing
+			// but it can be done further
 			relFilePath, err := filepath.Rel(relPath, filePath)
 			if err != nil {
 				return err
 			}
 
-			// TODO: add comment
+			// When IncludeSourceDir is false the relative path for the
+			// root folder is '.', we have to ignore this folder
 			if relFilePath == "." {
 				return nil
 			}
 
-			// TODO: add comment
+			// Check if we have to add the current file based on the user filters
 			if !optimizedMatches(relFilePath, filters) {
 				return nil
 			}
 
+			// All good, relative path made, filters applied, now we can write
+			// the user file into tar file
 			return writeTarFile(filePath, relFilePath, tarFile.TarWriter)
 		})
 
 	return
 }
 
-// ListTar ...
+// ListTar lists all entries from a tar file
 func ListTar(name string) ([]*tar.Header, error) {
 	tarFile, err := openTarFile(name)
 	if err != nil {
@@ -127,7 +135,7 @@ func ListTar(name string) ([]*tar.Header, error) {
 	}
 }
 
-// UnTar ...
+// UnTar extracts the files from a tar file into a target directory
 func UnTar(name, targetDir string, options *UnTarOptions) error {
 	if options == nil {
 		options = &UnTarOptions{}
@@ -142,7 +150,7 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 		return err
 	}
 
-	// To improve performance filters are prepared before.
+	// To improve performance the filters are prepared before.
 	filters := prepareFilters(options.Filters)
 
 	for {
@@ -154,15 +162,16 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 			return err
 		}
 
+		// Removes the last slash to avoid different behaviors when `header.Name` is a folder
 		filePath := filepath.Clean(header.Name)
 
+		// Check if we have to extact the current file based on the user filters
 		if !optimizedMatches(filePath, filters) {
 			continue
 		}
 
-		// If it is Flat Dir we have to store all files
-		// in the root folder and we have to ignore
-		// all directories
+		// If FlatDir is true we have to extract all files into root folder
+		// and we have to ignore all sub directories
 		if options.FlatDir {
 			if header.Typeflag == tar.TypeDir {
 				continue
@@ -170,13 +179,11 @@ func UnTar(name, targetDir string, options *UnTarOptions) error {
 			filePath = filepath.Base(filePath)
 		}
 
-		// If the file has been written with absolute path
-		// we should extract as it is.
-		if !path.IsAbs(filePath) {
-			filePath = path.Join(targetDir, filePath)
-		}
+		// If `filePath` is an absolute path we are going to extract it
+		// relative to the `targetDir`
+		filePath = path.Join(targetDir, filePath)
 
-		if err := extractTarFile(filePath, header, tarFile.TarReader, options.NoOverride); err != nil {
+		if err := extractTarFile(filePath, header, tarFile.TarReader); err != nil {
 			return err
 		}
 	}
@@ -210,12 +217,12 @@ func createTarFile(name string, options *TarOptions) (*tarFile, error) {
 }
 
 func openTarFile(name string) (*tarFile, error) {
-	file, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	file, err := os.OpenFile(name, os.O_RDONLY, os.ModePerm)
 	if err != nil {
 		return nil, err
 	}
 
-	compression, err := getTarCompression(file)
+	compression, err := detectCompression(file)
 	if err != nil {
 		return nil, err
 	}
@@ -243,56 +250,50 @@ func openTarFile(name string) (*tarFile, error) {
 	}, nil
 }
 
-func getTarCompression(file *os.File) (Compression, error) {
-	source := make([]byte, 4)
-
-	if _, err := file.Read(source); err != nil {
-		return Uncompressed, err
-	}
-
-	if _, err := file.Seek(0, os.SEEK_SET); err != nil {
-		return Uncompressed, err
-	}
-
-	for compression, m := range map[Compression][]byte{
-		Gzip: {0x1F, 0x8B, 0x08},
-	} {
-		if len(source) < len(m) {
-			continue
-		}
-		if bytes.Compare(m, source[:len(m)]) == 0 {
-			return compression, nil
-		}
-	}
-	return Uncompressed, nil
-}
-
-func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader, noOverride bool) error {
+func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader) error {
 	// header.Mode is in linux format, we have to converto os.FileMode,
 	// to be compatible to windows, ...
-	fileInfo := header.FileInfo()
+	headerInfo := header.FileInfo()
 
 	switch header.Typeflag {
 	case tar.TypeDir:
-		// Create directory unless it exists as a directory already.
-		// In that case we just want to merge the two
-		// If it is not a dictionary returns the error
-		if fi, err := os.Lstat(filePath); !(err == nil && fi.IsDir()) {
-			if err := os.Mkdir(filePath, fileInfo.Mode()); err != nil {
-				return err
-			}
-		}
-		return nil
-	case tar.TypeReg, tar.TypeRegA:
-		// Source is regular file
-		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, fileInfo.Mode())
-		if err != nil {
+		fileInfo, err := os.Lstat(filePath)
+		if err != nil && !os.IsNotExist(err) {
 			return err
 		}
 
-		defer file.Close()
+		// When the `filePath` already exists on disk and it is a regular file
+		// it must be deleted in order to create the directory otherwise we should return an error.
+		// When `filePath` already exists on dis and it is a directory
+		// we try to delete it in order to create the extracted directory,
+		// if it is not possible we are going to use this directory to extract the files.
 
-		if _, err := io.Copy(file, reader); err != nil {
+		if err == nil {
+			if err := os.Remove(filePath); err != nil && !fileInfo.IsDir() {
+				return err
+			}
+		}
+
+		if err := os.Mkdir(filePath, headerInfo.Mode()); err != nil && !os.IsExist(err) {
+			return err
+		}
+
+		return nil
+	case tar.TypeReg, tar.TypeRegA:
+		_, err := os.Lstat(filePath)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+
+		// When the `filePath` already exists on disk it must be deleted
+		// in order to create the extracted file
+		if err == nil {
+			if err := os.Remove(filePath); err != nil {
+				return err
+			}
+		}
+
+		if err := createFile(filePath, headerInfo.Mode(), reader); err != nil {
 			return err
 		}
 
@@ -358,4 +359,28 @@ func closeTarFile(tf *tarFile, remove bool) error {
 	}
 
 	return nil
+}
+
+func detectCompression(file *os.File) (Compression, error) {
+	source := make([]byte, 4)
+
+	if _, err := file.Read(source); err != nil {
+		return Uncompressed, err
+	}
+
+	if _, err := file.Seek(0, os.SEEK_SET); err != nil {
+		return Uncompressed, err
+	}
+
+	for compression, m := range map[Compression][]byte{
+		Gzip: {0x1F, 0x8B, 0x08},
+	} {
+		if len(source) < len(m) {
+			continue
+		}
+		if bytes.Compare(m, source[:len(m)]) == 0 {
+			return compression, nil
+		}
+	}
+	return Uncompressed, nil
 }
