@@ -32,13 +32,14 @@ func TestTarFolder(t *testing.T) {
 	headers, err := ListTar(filename)
 	assert.NoError(t, err)
 
-	assert.Equal(t, 6, len(headers))
+	assert.Equal(t, 7, len(headers))
 	assert.Equal(t, "a.txt", headers[0].Name)
 	assert.Equal(t, "b.txt", headers[1].Name)
 	assert.Equal(t, "c", headers[2].Name)
 	assert.Equal(t, "c/c1.txt", headers[3].Name)
 	assert.Equal(t, "c/c2.txt", headers[4].Name)
 	assert.Equal(t, "d", headers[5].Name)
+	assert.Equal(t, "symlink.txt", headers[6].Name)
 }
 
 func TestTarFolderWithIncludeSourceDir(t *testing.T) {
@@ -51,7 +52,7 @@ func TestTarFolderWithIncludeSourceDir(t *testing.T) {
 	headers, err := ListTar(filename)
 	assert.NoError(t, err)
 
-	assert.Equal(t, 7, len(headers))
+	assert.Equal(t, 8, len(headers))
 	assert.Equal(t, "input", headers[0].Name)
 	assert.Equal(t, "input/a.txt", headers[1].Name)
 	assert.Equal(t, "input/b.txt", headers[2].Name)
@@ -59,6 +60,7 @@ func TestTarFolderWithIncludeSourceDir(t *testing.T) {
 	assert.Equal(t, "input/c/c1.txt", headers[4].Name)
 	assert.Equal(t, "input/c/c2.txt", headers[5].Name)
 	assert.Equal(t, "input/d", headers[6].Name)
+	assert.Equal(t, "input/symlink.txt", headers[7].Name)
 }
 
 func TestAppendCompressedTar(t *testing.T) {
@@ -123,6 +125,7 @@ func TestUnTar(t *testing.T) {
 
 	assert.Equal(t, true, pathExists("tests/output/a.txt"))
 	assert.Equal(t, true, pathExists("tests/output/b.txt"))
+	assert.Equal(t, true, pathExists("tests/output/symlink.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c"))
 	assert.Equal(t, true, pathExists("tests/output/c/c1.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c/c2.txt"))
@@ -142,6 +145,7 @@ func TestUnTarWithFlatDir(t *testing.T) {
 
 	assert.Equal(t, true, pathExists("tests/output/a.txt"))
 	assert.Equal(t, true, pathExists("tests/output/b.txt"))
+	assert.Equal(t, true, pathExists("tests/output/symlink.txt"))
 	assert.Equal(t, false, pathExists("tests/output/c"))
 	assert.Equal(t, true, pathExists("tests/output/c1.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c2.txt"))
@@ -162,6 +166,7 @@ func TestUnTarWithFilters(t *testing.T) {
 
 	assert.Equal(t, true, pathExists("tests/output/a.txt"))
 	assert.Equal(t, false, pathExists("tests/output/b.txt"))
+	assert.Equal(t, false, pathExists("tests/output/symlink.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c"))
 	assert.Equal(t, false, pathExists("tests/output/c/c1.txt"))
 	assert.Equal(t, true, pathExists("tests/output/c/c2.txt"))

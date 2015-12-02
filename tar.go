@@ -341,66 +341,62 @@ func openTarFile(name string, append bool) (*tarFile, error) {
 }
 
 func extractTarFile(filePath string, header *tar.Header, reader *tar.Reader, noOverride bool) error {
-	// header.Mode is in linux format, we have to converto os.FileMode,
-	// to be compatible to windows, ...
+	fileInfo, err := os.Lstat(filePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	// If the `filePath` already exists on disk and it is a file
+	// we try to delete it in order to create a new one unless
+	// `noOverride` is set to true
+	if err == nil && !fileInfo.IsDir() {
+		if noOverride {
+			return nil
+		}
+
+		if err := os.Remove(filePath); err != nil {
+			return err
+		}
+	}
+
+	// header.Mode is in linux format, we have to convert it to os.FileMode
+	// to be compatible to other platforms.
 	headerInfo := header.FileInfo()
 
 	switch header.Typeflag {
 	case tar.TypeDir:
-		fileInfo, err := os.Lstat(filePath)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-
-		// If the `filePath` already exists on disk and it is a regular file
-		// it must be deleted in order to create the directory otherwise we should return an error.
-
-		if err == nil && !fileInfo.IsDir() {
-			if err := os.Remove(filePath); err != nil {
-				return err
-			}
-		}
-
 		if err := os.Mkdir(filePath, headerInfo.Mode()); err != nil && !os.IsExist(err) {
 			return err
 		}
-
-		return nil
 	case tar.TypeReg, tar.TypeRegA:
-		_, err := os.Lstat(filePath)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-
-		// When the `filePath` already exists on disk it must be deleted
-		// in order to create the extracted file
-		if err == nil {
-			if noOverride {
-				return nil
-			}
-
-			if err := os.Remove(filePath); err != nil {
-				return err
-			}
-		}
-
 		if err := createFile(filePath, headerInfo.Mode(), reader); err != nil {
 			return err
 		}
-
-		return nil
+	case tar.TypeSymlink:
+		if err := os.Symlink(header.Linkname, filePath); err != nil {
+			return err
+		}
 	default:
-		return fmt.Errorf("File type not supported: %c", header.Typeflag)
+		return fmt.Errorf("Unhandled tar header type %d", header.Typeflag)
 	}
+
+	return nil
 }
 
 func writeTarFile(filePath, name string, writer *tar.Writer) error {
-	fileInfo, err := os.Stat(filePath)
+	fileInfo, err := os.Lstat(filePath)
 	if err != nil {
 		return err
 	}
 
-	header, err := tar.FileInfoHeader(fileInfo, "")
+	link := ""
+	if fileInfo.Mode()&os.ModeSymlink != 0 {
+		if link, err = os.Readlink(filePath); err != nil {
+			return err
+		}
+	}
+
+	header, err := tar.FileInfoHeader(fileInfo, link)
 	if err != nil {
 		return err
 	}
