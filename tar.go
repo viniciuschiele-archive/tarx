@@ -71,7 +71,7 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 		options = &TarOptions{}
 	}
 
-	srcInfo, err := os.Stat(srcPath)
+	srcInfo, err := os.Lstat(srcPath)
 	if err != nil {
 		return
 	}
