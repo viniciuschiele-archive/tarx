@@ -175,7 +175,7 @@ func IterTar(name string) (*TarReader, error) {
 
 // ReadTar reads a specific file from the tar file.
 // If the file is not a regular file it returns a reader nil
-func ReadTar(name string, fileName string) (*tar.Header, io.ReadCloser, error) {
+func ReadTar(name, fileName string) (*tar.Header, io.ReadCloser, error) {
 	reader, err := IterTar(name)
 	if err != nil {
 		return nil, nil, err
