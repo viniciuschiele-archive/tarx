@@ -185,7 +185,7 @@ func ReadTar(name string, fileName string) (*tar.Header, io.ReadCloser, error) {
 		}
 
 		// If the file found is not a regular file we don't return a reader
-		if name == header.Name {
+		if name == path.Clean(header.Name) {
 			if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
 				return header, &tarReader{TarFile: tarFile}, nil
 			}
@@ -295,7 +295,11 @@ func openTarFile(name string, append bool) (*tarFile, error) {
 		return nil, err
 	}
 
-	// I have found only this hack to append files into tar file.
+	var tarReader *tar.Reader
+	var tarWriter *tar.Writer
+	var compressReader io.ReadCloser
+
+	// I have only found this hack to append files into a tar file.
 	// It works only for uncompressed tar files :(
 	// http://stackoverflow.com/questions/18323995/golang-append-file-to-an-existing-tar-archive
 	// We may improve it in the future.
@@ -305,23 +309,20 @@ func openTarFile(name string, append bool) (*tarFile, error) {
 		}
 
 		if _, err = file.Seek(-2<<9, os.SEEK_END); err != nil {
+			file.Close()
 			return nil, err
 		}
-	}
 
-	var tarReader *tar.Reader
-	var tarWriter *tar.Writer
-	var compressReader io.ReadCloser
-
-	if append {
 		tarWriter = tar.NewWriter(file)
 	}
 
-	if compression == Gzip {
+	switch compression {
+	case Gzip:
 		if compressReader, err = gzip.NewReader(file); err != nil {
+			file.Close()
 			return nil, err
 		}
-	} else if compression == Bzip2 {
+	case Bzip2:
 		compressReader = &readCloserWrapper{Reader: bzip2.NewReader(file)}
 	}
 
@@ -430,11 +431,15 @@ func closeTarFile(tf *tarFile, remove bool) error {
 	}
 
 	if tf.CompressReader != nil {
-		return tf.CompressReader.Close()
+		if err := tf.CompressReader.Close(); err != nil {
+			return err
+		}
 	}
 
 	if tf.CompressWriter != nil {
-		return tf.CompressWriter.Close()
+		if err := tf.CompressWriter.Close(); err != nil {
+			return err
+		}
 	}
 
 	if err := tf.File.Close(); err != nil {
