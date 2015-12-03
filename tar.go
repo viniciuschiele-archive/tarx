@@ -47,6 +47,13 @@ type UnTarOptions struct {
 	NoOverride bool
 }
 
+// TarReader is used to expose the tar file to the user
+// Close needs to be called in order to close the tar file.
+type TarReader struct {
+	io.ReadCloser
+	tarFile *tarFile
+}
+
 // tarFile holds all resources for the opened tar file
 type tarFile struct {
 	Name           string
@@ -55,13 +62,6 @@ type tarFile struct {
 	TarWriter      *tar.Writer
 	CompressReader io.ReadCloser
 	CompressWriter io.WriteCloser
-}
-
-// tarReader is used to expose the tar file to the user
-// Close needs to call in order to close the tar file.
-type tarReader struct {
-	io.ReadCloser
-	TarFile *tarFile
 }
 
 // Tar compress a source path into a tar file.
@@ -139,7 +139,7 @@ func Tar(name, srcPath string, options *TarOptions) (err error) {
 	return
 }
 
-// ListTar lists all entries from a tar file
+// ListTar lists all entries from a tar file.
 func ListTar(name string) ([]*tar.Header, error) {
 	tarFile, err := openTarFile(name, false)
 	if err != nil {
@@ -163,10 +163,20 @@ func ListTar(name string) ([]*tar.Header, error) {
 	}
 }
 
+// IterTar returns a reader to iterate through the tar file.
+func IterTar(name string) (*TarReader, error) {
+	tarFile, err := openTarFile(name, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TarReader{tarFile: tarFile}, nil
+}
+
 // ReadTar reads a specific file from the tar file.
 // If the file is not a regular file it returns a reader nil
 func ReadTar(name string, fileName string) (*tar.Header, io.ReadCloser, error) {
-	tarFile, err := openTarFile(name, false)
+	reader, err := IterTar(name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -174,22 +184,22 @@ func ReadTar(name string, fileName string) (*tar.Header, io.ReadCloser, error) {
 	name = path.Clean(fileName)
 
 	for {
-		header, err := tarFile.TarReader.Next()
+		header, err := reader.Next()
 		if err == io.EOF {
-			closeTarFile(tarFile, false)
+			reader.Close()
 			return nil, nil, os.ErrNotExist
 		}
 		if err != nil {
-			closeTarFile(tarFile, false)
+			reader.Close()
 			return nil, nil, err
 		}
 
 		// If the file found is not a regular file we don't return a reader
 		if name == path.Clean(header.Name) {
 			if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
-				return header, &tarReader{TarFile: tarFile}, nil
+				return header, reader, nil
 			}
-			closeTarFile(tarFile, false)
+			reader.Close()
 			return header, nil, nil
 		}
 	}
@@ -478,10 +488,20 @@ func detectCompression(file *os.File) (Compression, error) {
 	return Uncompressed, nil
 }
 
-func (r *tarReader) Read(p []byte) (n int, err error) {
-	return r.TarFile.TarReader.Read(p)
+// Next advances to the next entry in the tar archive.
+// io.EOF is returned at the end of the input.
+func (r *TarReader) Next() (*tar.Header, error) {
+	return r.tarFile.TarReader.Next()
 }
 
-func (r *tarReader) Close() error {
-	return closeTarFile(r.TarFile, false)
+// Read reads from the current entry in the tar archive.
+// It returns 0, io.EOF when it reaches the end of that entry,
+// until Next is called to advance to the next entry.
+func (r *TarReader) Read(p []byte) (n int, err error) {
+	return r.tarFile.TarReader.Read(p)
+}
+
+// Close closes the reader
+func (r *TarReader) Close() error {
+	return closeTarFile(r.tarFile, false)
 }
