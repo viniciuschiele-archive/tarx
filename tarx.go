@@ -25,11 +25,10 @@ const (
 	Bzip2
 )
 
+// Common errors
 var (
-	// ErrAppendNotSupported means append cannot be used on compressed files
 	ErrAppendNotSupported = errors.New("Append is only supported on compressed files")
-	// ErrBzip2NotSupported means bzip2 is not supported for compression
-	ErrBzip2NotSupported = errors.New("Bzip2 is not supported for compression")
+	ErrBzip2NotSupported  = errors.New("Bzip2 is not supported for compression")
 )
 
 // CompressOptions is the compression configuration
@@ -47,6 +46,7 @@ type ExtractOptions struct {
 	NoOverride bool
 }
 
+// Internal struct to hold all resources to read a tar file
 type tarReader struct {
 	io.ReadCloser
 	file           *os.File
@@ -56,6 +56,7 @@ type tarReader struct {
 	header         *tar.Header
 }
 
+// Internal struct to hold all resources to write a tar file
 type tarWriter struct {
 	io.WriteCloser
 	file           *os.File
@@ -66,25 +67,20 @@ type tarWriter struct {
 
 // Compress compress a source path into a tar file.
 // It supports compressed and uncompressed format
-func Compress(fileName, srcPath string, options *CompressOptions) (err error) {
+func Compress(fileName, srcPath string, options *CompressOptions) error {
 	if options == nil {
 		options = &CompressOptions{}
 	}
 
 	srcInfo, err := os.Lstat(srcPath)
 	if err != nil {
-		return
+		return err
 	}
 
 	writer, err := newWriter(fileName, options)
 	if err != nil {
-		return
+		return err
 	}
-
-	// If any error occurs we delete the tar file
-	defer func() {
-		writer.Close(err != nil)
-	}()
 
 	// Removes the last slash to avoid different behaviors when `srcPath` is a folder
 	srcPath = path.Clean(srcPath)
@@ -129,7 +125,10 @@ func Compress(fileName, srcPath string, options *CompressOptions) (err error) {
 			return writer.Write(filePath, relFilePath)
 		})
 
-	return
+	// If any error occurs we delete the tar file
+	writer.Close(err != nil)
+
+	return err
 }
 
 // Extract extracts the files from a tar file into a target directory
@@ -162,10 +161,10 @@ func Extract(fileName, targetDir string, options *ExtractOptions) error {
 		}
 
 		// Removes the last slash to avoid different behaviors when `header.Name` is a folder
-		filePath := filepath.Clean(reader.header.Name)
+		targetFileName := filepath.Clean(reader.header.Name)
 
 		// Check if we have to extact the current file based on the user filters
-		if !optimizedMatches(filePath, filters) {
+		if !optimizedMatches(targetFileName, filters) {
 			continue
 		}
 
@@ -175,14 +174,14 @@ func Extract(fileName, targetDir string, options *ExtractOptions) error {
 			if reader.header.Typeflag == tar.TypeDir {
 				continue
 			}
-			filePath = filepath.Base(filePath)
+			targetFileName = filepath.Base(targetFileName)
 		}
 
-		// If `filePath` is an absolute path we are going to extract it
+		// If `targetFileName` is an absolute path we are going to extract it
 		// relative to the `targetDir`
-		filePath = path.Join(targetDir, filePath)
+		targetFileName = path.Join(targetDir, targetFileName)
 
-		if err := reader.Extract(filePath, options.NoOverride); err != nil {
+		if err := reader.Extract(targetFileName, options.NoOverride); err != nil {
 			return err
 		}
 	}
@@ -244,6 +243,7 @@ func Read(fileName, targetFileName string) (*tar.Header, io.ReadCloser, error) {
 	}
 }
 
+// newReader opens a tar file as readonly
 func newReader(fileName string) (*tarReader, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, os.ModePerm)
 	if err != nil {
@@ -285,6 +285,8 @@ func newReader(fileName string) (*tarReader, error) {
 	}, nil
 }
 
+// newReader creates a new tar file on disk if `append=false` otherwise
+// it opens the tar file.
 func newWriter(fileName string, options *CompressOptions) (*tarWriter, error) {
 	var file *os.File
 	var err error
@@ -360,6 +362,7 @@ func newWriter(fileName string, options *CompressOptions) (*tarWriter, error) {
 	}, nil
 }
 
+// detectCompression detects which comperssion the tar file has been using.
 func detectCompression(file *os.File) (Compression, error) {
 	source := make([]byte, 4)
 
@@ -385,13 +388,14 @@ func detectCompression(file *os.File) (Compression, error) {
 	return Uncompressed, nil
 }
 
-func (r *tarReader) Extract(filePath string, noOverride bool) error {
-	fileInfo, err := os.Lstat(filePath)
+// Extract extracts a tar file into disk
+func (r *tarReader) Extract(fileName string, noOverride bool) error {
+	fileInfo, err := os.Lstat(fileName)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	// If the `filePath` already exists on disk and it is a file
+	// If the `fileName` already exists on disk and it is a file
 	// we try to delete it in order to create a new one unless
 	// `noOverride` is set to true
 	if err == nil && !fileInfo.IsDir() {
@@ -399,7 +403,7 @@ func (r *tarReader) Extract(filePath string, noOverride bool) error {
 			return nil
 		}
 
-		if err := os.Remove(filePath); err != nil {
+		if err := os.Remove(fileName); err != nil {
 			return err
 		}
 	}
@@ -410,15 +414,15 @@ func (r *tarReader) Extract(filePath string, noOverride bool) error {
 
 	switch r.header.Typeflag {
 	case tar.TypeDir:
-		if err := os.Mkdir(filePath, headerInfo.Mode()); err != nil && !os.IsExist(err) {
+		if err := os.Mkdir(fileName, headerInfo.Mode()); err != nil && !os.IsExist(err) {
 			return err
 		}
 	case tar.TypeReg, tar.TypeRegA:
-		if err := createFile(filePath, headerInfo.Mode(), r.reader); err != nil {
+		if err := createFile(fileName, headerInfo.Mode(), r.reader); err != nil {
 			return err
 		}
 	case tar.TypeSymlink:
-		if err := os.Symlink(r.header.Linkname, filePath); err != nil {
+		if err := os.Symlink(r.header.Linkname, fileName); err != nil {
 			return err
 		}
 	default:
@@ -428,16 +432,19 @@ func (r *tarReader) Extract(filePath string, noOverride bool) error {
 	return nil
 }
 
+// Next is just a wrapper aroung tar.Reader.Next
 func (r *tarReader) Next() error {
 	header, err := r.reader.Next()
 	r.header = header
 	return err
 }
 
+// Next is just a wrapper aroung tar.Reader.Read
 func (r *tarReader) Read(p []byte) (n int, err error) {
 	return r.reader.Read(p)
 }
 
+// Close closes the tar file.
 func (r *tarReader) Close() error {
 	if r.compressReader != nil {
 		if err := r.compressReader.Close(); err != nil {
@@ -452,6 +459,9 @@ func (r *tarReader) Close() error {
 	return nil
 }
 
+// Close closes the tar file, we usually use remove=true when the tar file
+// is created but the compression fails, in this case
+// we have to delete the tar file.
 func (w *tarWriter) Close(remove bool) error {
 	if w.writer != nil {
 		if err := w.writer.Close(); err != nil {
@@ -476,15 +486,16 @@ func (w *tarWriter) Close(remove bool) error {
 	return nil
 }
 
-func (w *tarWriter) Write(filePath, name string) error {
-	fileInfo, err := os.Lstat(filePath)
+// Write writes a file from disk into a tar file.
+func (w *tarWriter) Write(fileName, name string) error {
+	fileInfo, err := os.Lstat(fileName)
 	if err != nil {
 		return err
 	}
 
 	link := ""
 	if fileInfo.Mode()&os.ModeSymlink != 0 {
-		if link, err = os.Readlink(filePath); err != nil {
+		if link, err = os.Readlink(fileName); err != nil {
 			return err
 		}
 	}
@@ -504,7 +515,7 @@ func (w *tarWriter) Write(filePath, name string) error {
 		return nil
 	}
 
-	file, err := os.Open(filePath)
+	file, err := os.Open(fileName)
 	if err != nil {
 		return err
 	}
