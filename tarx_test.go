@@ -1,4 +1,4 @@
-package archive
+package tarx
 
 import (
 	"io/ioutil"
