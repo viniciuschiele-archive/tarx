@@ -1,3 +1,4 @@
+// Package tarx implements access to tar archives on top of archive/​tar.
 package tarx
 
 import (
@@ -13,7 +14,7 @@ import (
 	"path/filepath"
 )
 
-// Compression is the state represtents if compressed or not.
+// Compression is the state represents if compressed or not.
 type Compression int
 
 const (
@@ -66,7 +67,7 @@ type tarWriter struct {
 }
 
 // Compress compress a source path into a tar file.
-// It supports compressed and uncompressed format
+// All files will be relative to the tar file.
 func Compress(fileName, srcPath string, options *CompressOptions) error {
 	if options == nil {
 		options = &CompressOptions{}
@@ -131,7 +132,7 @@ func Compress(fileName, srcPath string, options *CompressOptions) error {
 	return err
 }
 
-// Extract extracts the files from a tar file into a target directory
+// Extract extracts the files from a tar file into a target directory.
 func Extract(fileName, targetDir string, options *ExtractOptions) error {
 	if options == nil {
 		options = &ExtractOptions{}
@@ -187,33 +188,11 @@ func Extract(fileName, targetDir string, options *ExtractOptions) error {
 	}
 }
 
-// List lists all entries from a tar file.
-func List(fileName string) ([]*tar.Header, error) {
-	reader, err := newReader(fileName)
-	if err != nil {
-		return nil, err
-	}
-
-	defer reader.Close()
-
-	headers := []*tar.Header{}
-
-	for {
-		err := reader.Next()
-		if err == io.EOF {
-			return headers, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		headers = append(headers, reader.header)
-	}
-}
-
-// Read reads a specific file from the tar file.
-// If the file is not a regular file it returns a reader nil
-func Read(fileName, targetFileName string) (*tar.Header, io.ReadCloser, error) {
+// Find returns the header and ReadCloser for the entry in the tarfile
+// that matches the filename. If nothing matches, an `os.ErrNotExists`
+// error is returned.
+// If the `targetFileName` is not a regular file it returns a reader `nil`.
+func Find(fileName, targetFileName string) (*tar.Header, io.ReadCloser, error) {
 	reader, err := newReader(fileName)
 	if err != nil {
 		return nil, nil, err
@@ -240,6 +219,30 @@ func Read(fileName, targetFileName string) (*tar.Header, io.ReadCloser, error) {
 			reader.Close()
 			return header, nil, nil
 		}
+	}
+}
+
+// List lists all entries from a tar file.
+func List(fileName string) ([]*tar.Header, error) {
+	reader, err := newReader(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	defer reader.Close()
+
+	headers := []*tar.Header{}
+
+	for {
+		err := reader.Next()
+		if err == io.EOF {
+			return headers, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		headers = append(headers, reader.header)
 	}
 }
 
