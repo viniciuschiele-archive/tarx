@@ -91,14 +91,14 @@ func TestAppendFileWithGzip(t *testing.T) {
 	assert.EqualError(t, ErrAppendNotSupported, err.Error())
 }
 
-func TestReadFile(t *testing.T) {
+func TestFindFile(t *testing.T) {
 	filename := "tests/test.tar"
 
 	err := Compress(filename, "tests/input/a.txt", nil)
 	assert.NoError(t, err)
 	defer os.Remove(filename)
 
-	header, reader, err := Read(filename, "a.txt")
+	header, reader, err := Find(filename, "a.txt")
 	assert.Equal(t, nil, err)
 	assert.Equal(t, "a.txt", header.Name)
 	b, _ := ioutil.ReadAll(reader)
@@ -106,14 +106,14 @@ func TestReadFile(t *testing.T) {
 	assert.Equal(t, nil, reader.Close())
 }
 
-func TestReadDir(t *testing.T) {
+func TestFindDir(t *testing.T) {
 	filename := "tests/test.tar"
 
 	err := Compress(filename, "tests/input", nil)
 	assert.NoError(t, err)
 	defer os.Remove(filename)
 
-	_, reader, err := Read(filename, "c")
+	_, reader, err := Find(filename, "c")
 	assert.Equal(t, nil, reader)
 	assert.Equal(t, nil, err)
 }
@@ -125,7 +125,7 @@ func TestReadNotExists(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.Remove(filename)
 
-	_, _, err = Read(filename, "notExists.txt")
+	_, _, err = Find(filename, "notExists.txt")
 	assert.Equal(t, os.ErrNotExist, err)
 }
 
