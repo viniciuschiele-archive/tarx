@@ -174,7 +174,7 @@ func TestExtractWithFilters(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.Remove(filename)
 
-	filters := []string{"a.txt", "c/c2.txt", "d"}
+	filters := []string{"a.txt", "c/c2.txt"}
 	err = Extract(filename, "tests/output", &ExtractOptions{Filters: filters})
 	assert.NoError(t, err)
 	defer os.RemoveAll("tests/output")
