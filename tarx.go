@@ -367,13 +367,9 @@ func newWriter(fileName string, options *CompressOptions) (*tarWriter, error) {
 
 // detectCompression detects which comperssion the tar file has been using.
 func detectCompression(file *os.File) (Compression, error) {
-	source := make([]byte, 4)
+	source := make([]byte, 3)
 
-	if _, err := file.Read(source); err != nil {
-		return Uncompressed, err
-	}
-
-	if _, err := file.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := file.ReadAt(source, 0); err != nil {
 		return Uncompressed, err
 	}
 
