@@ -1,14 +1,11 @@
-=================================
 tarx
 =================================
 tarx is a golang package for archiving files and folders to tar format.
 
-Installation
-===============
+### Installation
     $ go get github.com/viniciuschiele/tarx
 
-Examples
-===============
+### Examples
 Compressing a file.
 
 ```go
@@ -127,9 +124,3 @@ func main() {
     }
 }
 ```
-
-Feedback
-===============
-Please use the Issues_ for feature requests and troubleshooting usage.
-
-.. _Issues: https://github.com/viniciuschiele/tarx/issues
